@@ -1,19 +1,22 @@
 # main.py
 
 import os
+os.environ['TF_USE_LEGACY_KERAS'] = '1'
 import numpy as np
+import tensorflow
 import pandas as pd
 from utils.preprocess import process_features
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 import tensorflow as tf
+from utils.callbacks import LossLogger, ResetStatesCallback
 from keras._tf_keras.keras.losses import MeanSquaredError,MeanAbsoluteError
-from networks.networks import ltc_network, cfc_network, ltc_fc_network, cfc_fc_network
-from models.PGNN import PGNN
-from utils.callbacks import LossLogger
+from networks.UQ_networks import SNGP_network, GP_network
+from models.UQ_SNGP import UQ_SNGP
+from networks.losses import NLL
 
 
-model_name = 'PG_LTC_with_fully_connected_weights'
+model_name = 'SNGP_without_physics_guidance_gamma_1_weights'
 
 feature_dir = 'tf_features'
 weights_dir = 'model_weights'
@@ -47,48 +50,21 @@ X = np.concatenate([vibration_features, t_data, T_data], axis=1)
 scaler = StandardScaler()
 X = scaler.fit_transform(X)
 
-# Split data
-X_train, X_val, y_train, y_val, t_train, t_val, T_train, T_val, Load_train, Load_val, RPM_train, RPM_val = train_test_split(
-    X, y, t_data, T_data, Load, RPM, test_size=0.2, random_state=42,shuffle=True
-)
-
-
-def create_dataset(X, y, t_data, T_data, Load, RPM, batch_size=32):
-    dataset = tf.data.Dataset.from_tensor_slices((
-        (X, t_data, T_data),  # Inputs
-        (y, (Load, RPM))      # Targets and physics data
-    ))
-    return dataset.shuffle(buffer_size=1024).batch(batch_size, drop_remainder=True).prefetch(tf.data.AUTOTUNE)
-
-# Create datasets
-train_dataset = create_dataset(
-    X_train, y_train, t_train, T_train, Load_train, RPM_train
-)
-val_dataset = create_dataset(
-    X_val, y_val, t_val, T_val, Load_val, RPM_val
-)
 
 
 loss_logger = LossLogger()
 
-model = PGNN(
-    model_fn=ltc_fc_network,
-    optimizer='adam',
-    learning_rate=0.001,
-    loss_fn= mse_loss,
-    metrics_fn=mae_loss,
-    dynamic_weights=True,
-    model_name=model_name
-)
+model = SNGP_network(gamma=1.0)
 
 model.summary()
 # model.load_weights(f"{weights_dir}/{model_name}.keras")
 
-model.compile()
+model.compile(tf.keras.optimizers.Adam(learning_rate=0.001),loss=NLL)
 
-model.fit(train_dataset, epochs=100,callbacks=[loss_logger])
-model.save_weights(f"{weights_dir}/{model_name}.keras")
 
-df = pd.DataFrame(loss_logger.history)
+history = model.fit(X,y,epochs=50,validation_split=0.2,callbacks=[loss_logger])
+model.save(f"{weights_dir}/{model_name}.keras")
+
+df = pd.DataFrame(history.history)
 df.to_csv(f'{stat_dir}/{model_name}_training_history.csv', index=False)
 

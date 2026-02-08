@@ -1,19 +1,20 @@
 # main.py
 
 import os
+os.environ['TF_USE_LEGACY_KERAS'] = '1'
 import numpy as np
 import pandas as pd
 from utils.preprocess import process_features
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 import tensorflow as tf
+from utils.callbacks import LossLogger, ResetStatesCallback
 from keras._tf_keras.keras.losses import MeanSquaredError,MeanAbsoluteError
-from networks.networks import ltc_network, cfc_network, ltc_fc_network, cfc_fc_network
-from models.PGNN import PGNN
-from utils.callbacks import LossLogger
+from networks.UQ_networks import SNER_network, ER_network
+from models.UQ_SNER import UQ_SNER
+from networks.losses import NLL
+from evidential_deep_learning.losses import EvidentialRegression as edl_loss
 
-
-model_name = 'PG_LTC_with_fully_connected_weights'
 
 feature_dir = 'tf_features'
 weights_dir = 'model_weights'
@@ -38,7 +39,7 @@ vibration_features = np.concatenate((X_h, X_v), axis=-1)
 # Get other features
 t_data = np.concatenate([df['Time'].values.reshape(-1, 1) for df in dfs], axis=0)
 T_data = np.concatenate([(df['Temperature'].values + 273.15).reshape(-1, 1) for df in dfs], axis=0)
-y = np.concatenate([df['Degradation'].values.reshape(-1, 1) for df in dfs], axis=0)
+y = np.concatenate([df['Degradation_monotonic'].values.reshape(-1, 1) for df in dfs], axis=0)
 RPM = np.concatenate([df['RPM'].values.reshape(-1, 1) for df in dfs], axis=0)
 Load = np.concatenate([df['Load'].values.reshape(-1, 1) for df in dfs], axis=0)
 
@@ -68,16 +69,20 @@ val_dataset = create_dataset(
     X_val, y_val, t_val, T_val, Load_val, RPM_val
 )
 
+lamdbda = [0.2, 0.5, 1]
+
+model_name = f'PI_SNER_without_dynamic_weights_lambda_05_weights'
 
 loss_logger = LossLogger()
 
-model = PGNN(
-    model_fn=ltc_fc_network,
+model = UQ_SNER(
+    model_fn=SNER_network,
     optimizer='adam',
     learning_rate=0.001,
-    loss_fn= mse_loss,
+    loss_fn= edl_loss,
     metrics_fn=mae_loss,
-    dynamic_weights=True,
+    lambbda=0.5,
+    dynamic_weights=False,
     model_name=model_name
 )
 
@@ -86,9 +91,46 @@ model.summary()
 
 model.compile()
 
-model.fit(train_dataset, epochs=100,callbacks=[loss_logger])
+model.train(train_dataset, val_dataset, epochs=20,callbacks=[loss_logger])
 model.save_weights(f"{weights_dir}/{model_name}.keras")
 
-df = pd.DataFrame(loss_logger.history)
-df.to_csv(f'{stat_dir}/{model_name}_training_history.csv', index=False)
+# df = pd.DataFrame(loss_logger.history)
+# df.to_csv(f'{stat_dir}/{model_name}_training_history.csv', index=False)
 
+
+
+
+# for lam in lamdbda:
+#     lam_str = str(lam).replace('.', '')
+#     model_name = f'PI_SNER_lambda_{lam_str}_weights'
+
+#     print(f'\nTraining model with lambda = {lam}')
+
+#     model = UQ_SNER(
+#         model_fn=SNER_network,
+#         optimizer='adam',
+#         learning_rate=0.001,
+#         loss_fn=edl_loss,
+#         metrics_fn=mae_loss,
+#         lambbda=lam,
+#         dynamic_weights=False,
+#         model_name=model_name
+#     )
+
+#     # model.summary()
+#     model.compile()
+
+#     model.train(
+#         train_dataset,
+#         val_dataset,
+#         epochs=20,
+#         callbacks=[loss_logger]
+#     )
+
+#     model.save_weights(f"{weights_dir}/{model_name}.keras")
+
+#     # Optional: save training history per lambda
+#     # df = pd.DataFrame(loss_logger.history)
+#     # df.to_csv(f'{stat_dir}/{model_name}_training_history.csv', index=False)
+
+#     loss_logger.reset()
